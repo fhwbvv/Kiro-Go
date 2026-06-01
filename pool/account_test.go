@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestOverageAccountsAreSkippedByDefault(t *testing.T) {
+func TestOverLimitAccountsAreSkippedByDefault(t *testing.T) {
 	p := &AccountPool{}
 	normal := config.Account{ID: "normal"}
 	overLimit := config.Account{ID: "over", UsageCurrent: 10, UsageLimit: 10}
@@ -21,38 +21,44 @@ func TestOverageAccountsAreSkippedByDefault(t *testing.T) {
 			t.Fatalf("expected an account")
 		}
 		if acc.ID == "over" {
-			t.Fatalf("expected over-limit account to be skipped by default")
+			t.Fatalf("expected over-limit account to be skipped when upstream OverageStatus is empty")
 		}
 	}
 }
 
-func TestOverageAccountsCanBeSelectedWhenAllowed(t *testing.T) {
+func TestOverLimitAccountsCanBeSelectedWhenUpstreamOverageEnabled(t *testing.T) {
 	p := &AccountPool{}
 	overLimit := config.Account{
 		ID:            "over",
 		UsageCurrent:  10,
 		UsageLimit:    10,
-		AllowOverage:  true,
-		OverageWeight: 1,
+		OverageStatus: "ENABLED",
 	}
 
 	p.accounts = []config.Account{overLimit}
 
 	acc := p.GetNext()
 	if acc == nil {
-		t.Fatalf("expected allowed overage account")
+		t.Fatalf("expected upstream-enabled overage account to be selectable")
 	}
 	if acc.ID != "over" {
 		t.Fatalf("expected overage account, got %q", acc.ID)
 	}
 }
 
-func TestOverageWeightIsLowerThanNormalWeight(t *testing.T) {
-	normalWeight := effectiveWeight(1) * overageFrequencyScale
-	overageWeight := effectiveOverageWeight(1)
+func TestOverLimitAccountsRemainSkippedWhenUpstreamOverageDisabled(t *testing.T) {
+	p := &AccountPool{}
+	overLimit := config.Account{
+		ID:            "over",
+		UsageCurrent:  10,
+		UsageLimit:    10,
+		OverageStatus: "DISABLED",
+	}
 
-	if overageWeight >= normalWeight {
-		t.Fatalf("expected overage weight %d to be lower than normal weight %d", overageWeight, normalWeight)
+	p.accounts = []config.Account{overLimit}
+
+	if acc := p.GetNext(); acc != nil {
+		t.Fatalf("expected nil when upstream OverageStatus=DISABLED, got %q", acc.ID)
 	}
 }
 
@@ -266,5 +272,56 @@ func TestGetNextForModelExcludingSkipsExcludedAccount(t *testing.T) {
 	acc := p.GetNextForModelExcluding("claude-sonnet-4.5", map[string]bool{"a": true})
 	if acc == nil || acc.ID != "b" {
 		t.Fatalf("expected account b, got %#v", acc)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reload over-usage filtering
+// ---------------------------------------------------------------------------
+
+func TestReloadKeepsOverQuotaAccountWhenAllowOverUsage(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Init(cfgFile); err != nil {
+		t.Fatalf("config.Init: %v", err)
+	}
+	if err := config.AddAccount(config.Account{
+		ID:           "over",
+		Enabled:      true,
+		UsageCurrent: 10,
+		UsageLimit:   10,
+	}); err != nil {
+		t.Fatalf("AddAccount: %v", err)
+	}
+	if err := config.UpdateAllowOverUsage(true); err != nil {
+		t.Fatalf("UpdateAllowOverUsage: %v", err)
+	}
+
+	p := newTestPool()
+	p.Reload()
+
+	if got := p.GetNext(); got == nil || got.ID != "over" {
+		t.Fatalf("expected over-quota account to remain routable when allowOverUsage=true, got %#v", got)
+	}
+}
+
+func TestReloadDropsOverQuotaAccountWhenAllowOverUsageDisabled(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Init(cfgFile); err != nil {
+		t.Fatalf("config.Init: %v", err)
+	}
+	if err := config.AddAccount(config.Account{
+		ID:           "over",
+		Enabled:      true,
+		UsageCurrent: 10,
+		UsageLimit:   10,
+	}); err != nil {
+		t.Fatalf("AddAccount: %v", err)
+	}
+
+	p := newTestPool()
+	p.Reload()
+
+	if got := p.GetNext(); got != nil {
+		t.Fatalf("expected over-quota account to be dropped, got %q", got.ID)
 	}
 }
