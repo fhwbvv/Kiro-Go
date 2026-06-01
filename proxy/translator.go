@@ -317,7 +317,7 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	// Only attach structured tool results when they answer the last history
 	// assistant turn; otherwise they have already been folded into finalContent.
 	var attachToolResults []KiroToolResult
-	if keepCurrentToolResults {
+	if keepCurrentToolResults || len(currentImages) > 0 {
 		attachToolResults = currentToolResults
 	}
 	if len(kiroTools) > 0 || len(attachToolResults) > 0 {
@@ -1555,9 +1555,13 @@ func sanitizeKiroHistory(history []KiroHistoryMessage, currentToolResultIDs map[
 			if len(ctx.ToolResults) > 0 {
 				narrated := narrateToolResults(ctx.ToolResults, toolNames)
 				msg.UserInputMessage.Content = joinHistoryText(msg.UserInputMessage.Content, narrated)
-				ctx.ToolResults = nil
+				if len(msg.UserInputMessage.Images) == 0 {
+					ctx.ToolResults = nil
+				}
 			}
-			// History messages must not carry structured tool specs either.
+			// History messages must not carry structured tool specs. Image tool
+			// results keep their structured result context so the image remains
+			// attributable to the tool output rather than a plain user upload.
 			ctx.Tools = nil
 			if len(ctx.Tools) == 0 && len(ctx.ToolResults) == 0 {
 				msg.UserInputMessage.UserInputMessageContext = nil
